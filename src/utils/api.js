@@ -37,6 +37,36 @@ export const login = async (username, password) => {
   return parseJson(res);
 };
 
+export const requestPasswordOtp = async (email) => {
+  const res = await fetch(`${BASE_URL}/auth/request-password-otp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+
+  return parseJson(res);
+};
+
+export const verifyPasswordOtp = async (email, otp) => {
+  const res = await fetch(`${BASE_URL}/auth/verify-password-otp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, otp }),
+  });
+
+  return parseJson(res);
+};
+
+export const resetPasswordWithOtp = async (resetToken, newPassword) => {
+  const res = await fetch(`${BASE_URL}/auth/reset-password-with-otp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resetToken, newPassword }),
+  });
+
+  return parseJson(res);
+};
+
 // ===== EMPLOYEES =====
 export const getEmployees = async () => {
   const res = await fetch(`${BASE_URL}/employees`, {

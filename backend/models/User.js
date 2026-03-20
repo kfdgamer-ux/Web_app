@@ -10,6 +10,28 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  role: {
+    type: String,
+    enum: ["admin", "employee"],
+    default: "employee",
+  },
+  employeeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Employee",
+    default: null,
+  },
+  passwordResetOtpHash: {
+    type: String,
+    default: "",
+  },
+  passwordResetOtpExpiresAt: {
+    type: Date,
+    default: null,
+  },
+  passwordResetOtpRequestedAt: {
+    type: Date,
+    default: null,
+  },
 });
 
 export default mongoose.model("User", userSchema);

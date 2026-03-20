@@ -1,26 +1,23 @@
-import { Form, Input, Button, Upload, Avatar } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
-import { useNavigate } from "react-router-dom";
-import { addEmployee } from "../../utils/api";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Avatar, Button, Form, Input, Upload } from "antd";
+import { UploadOutlined } from "@ant-design/icons";
+import { addEmployee } from "../../utils/api";
 
 export default function AddEmployee() {
-
   const navigate = useNavigate();
-  const [file, setFile] = useState(null);       // 👈 lưu file
-  const [preview, setPreview] = useState("");   // 👈 preview ảnh
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState("");
 
-  // preview ảnh
-  const handlePreview = (file) => {
+  const handlePreview = (selectedFile) => {
     const reader = new FileReader();
     reader.onload = () => {
       setPreview(reader.result);
     };
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(selectedFile);
   };
 
   const onFinish = async (values) => {
-
     const formData = new FormData();
 
     formData.append("name", values.name || "");
@@ -28,32 +25,29 @@ export default function AddEmployee() {
     formData.append("phone", values.phone || "");
     formData.append("address", values.address || "");
     formData.append("role", values.role || "");
+    formData.append("username", values.username || "");
+    formData.append("password", values.password || "");
 
     if (file) {
-      formData.append("avatar", file); 
+      formData.append("avatar", file);
     }
 
     await addEmployee(formData);
-
     navigate("/employees");
   };
 
   return (
-
     <Form onFinish={onFinish} layout="vertical">
-
-      <Form.Item label="Avatar">
+      <Form.Item label="Ảnh đại diện">
         <Upload
-          beforeUpload={(file) => {
-            setFile(file);         // lưu file thật
-            handlePreview(file);   // preview
-            return false;          // không upload auto
+          beforeUpload={(selectedFile) => {
+            setFile(selectedFile);
+            handlePreview(selectedFile);
+            return false;
           }}
           showUploadList={false}
         >
-          <Button icon={<UploadOutlined />}>
-            Upload Avatar
-          </Button>
+          <Button icon={<UploadOutlined />}>Tải ảnh đại diện</Button>
         </Upload>
 
         {preview && (
@@ -63,7 +57,7 @@ export default function AddEmployee() {
         )}
       </Form.Item>
 
-      <Form.Item name="name" label="Name">
+      <Form.Item name="name" label="Tên">
         <Input />
       </Form.Item>
 
@@ -71,22 +65,37 @@ export default function AddEmployee() {
         <Input />
       </Form.Item>
 
-      <Form.Item name="phone" label="Phone">
+      <Form.Item name="phone" label="Số điện thoại">
         <Input />
       </Form.Item>
 
-      <Form.Item name="address" label="Address">
+      <Form.Item name="address" label="Địa chỉ">
         <Input />
       </Form.Item>
 
-      <Form.Item name="role" label="Role">
+      <Form.Item name="role" label="Vai trò">
         <Input />
+      </Form.Item>
+
+      <Form.Item
+        name="username"
+        label="Tên đăng nhập"
+        rules={[{ required: true, message: "Vui lòng nhập tên đăng nhập" }]}
+      >
+        <Input />
+      </Form.Item>
+
+      <Form.Item
+        name="password"
+        label="Mật khẩu"
+        rules={[{ required: true, message: "Vui lòng nhập mật khẩu" }]}
+      >
+        <Input.Password />
       </Form.Item>
 
       <Button type="primary" htmlType="submit">
-        Add Employee
+        Thêm nhân viên
       </Button>
-
     </Form>
   );
 }

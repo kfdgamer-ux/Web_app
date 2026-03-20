@@ -1,18 +1,6 @@
 import * as XLSX from "xlsx";
 import { normalizeProject, SECTION_CONFIG } from "./projectTemplate";
 
-const SECTION_HEADERS = [
-  "STT",
-  "Hang Muc",
-  "Bieu Mau Su Dung",
-  "Nguoi Thuc Hien",
-  "Thoi Gian Bat Dau",
-  "Thoi Gian Hoan Thanh",
-  "Ket Qua Thuc Hien",
-  "Bien Phap Khac Phuc",
-  "Ghi Chu",
-];
-
 const DEFAULT_WIDTHS = {
   narrow: 8,
   medium: 18,
@@ -25,6 +13,9 @@ const sanitizeFileName = (value) =>
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "")
     .replace(/\s+/g, "-")
     .slice(0, 80);
+
+const sanitizeSheetName = (value, fallback = "Sheet") =>
+  (value || fallback).replace(/[:\\/?*\[\]]/g, "").slice(0, 31) || fallback;
 
 const toDisplayValue = (value) => (value == null ? "" : String(value));
 
@@ -52,10 +43,7 @@ const applySheetFormatting = (sheet, rows, minWidths = []) => {
     }, 0);
 
     return {
-      wch: Math.min(
-        45,
-        Math.max(minWidths[colIndex] ?? DEFAULT_WIDTHS.medium, contentWidth),
-      ),
+      wch: Math.min(45, Math.max(minWidths[colIndex] ?? DEFAULT_WIDTHS.medium, contentWidth)),
     };
   });
 
@@ -65,9 +53,7 @@ const applySheetFormatting = (sheet, rows, minWidths = []) => {
       return Math.max(maxLines, countWrappedLines(cell, width));
     }, 1);
 
-    return {
-      hpt: Math.max(20, lineCount * 16),
-    };
+    return { hpt: Math.max(20, lineCount * 16) };
   });
 
   for (const cellAddress of Object.keys(sheet)) {
@@ -83,48 +69,47 @@ const applySheetFormatting = (sheet, rows, minWidths = []) => {
 };
 
 const buildOverviewRows = (project) => [
-  ["Xuat Chi Tiet Du An"],
+  ["Xuất Chi Tiết Dự Án"],
   [],
-  ["Ten Du An", project.name],
-  ["Cong Trinh", project.siteName],
-  ["Ma So", project.code],
-  ["Ngay", project.date],
-  ["Bieu Mau", project.formNo],
-  ["Hieu Chinh", project.revision],
-  ["Mo Ta", project.desc],
+  ["Tên Dự Án", project.name],
+  ["Công Trình", project.siteName],
+  ["Mã Số", project.code],
+  ["Ngày", project.date],
+  ["Biểu Mẫu", project.formNo],
+  ["Hiệu Chỉnh", project.revision],
+  ["Mô Tả", project.desc],
 ];
 
-const buildSectionRows = (project, section) => [
-  [section.title],
-  [section.subtitle],
-  [],
-  ["Ten Du An", project.name],
-  ["Cong Trinh", project.siteName],
-  ["Ma So", project.code],
-  ["Ngay", project.date],
-  ["Bieu Mau", project.formNo],
-  ["Hieu Chinh", project.revision],
-  [],
-  SECTION_HEADERS,
-  ...(project[section.key] ?? []).map((row, index) => [
-    index + 1,
-    row.objective,
-    row.usedForms,
-    row.personInCharge,
-    row.startTime,
-    row.endTime,
-    row.accomplishment,
-    row.correctiveMeasure,
-    row.remarks,
-  ]),
-];
+const buildSectionRows = (project, sectionKey) => {
+  const fallback = SECTION_CONFIG.find((item) => item.key === sectionKey) ?? {};
+  const section = project[sectionKey] ?? fallback;
+  const headerRow = ["STT", ...(section.columns ?? []).map((column) => column.name || "Cột")];
+
+  return [
+    [section.title || fallback.title || "Bảng dữ liệu"],
+    [section.subtitle || fallback.subtitle || ""],
+    [],
+    ["Tên Dự Án", project.name],
+    ["Công Trình", project.siteName],
+    ["Mã Số", project.code],
+    ["Ngày", project.date],
+    ["Biểu Mẫu", project.formNo],
+    ["Hiệu Chỉnh", project.revision],
+    [],
+    headerRow,
+    ...(section.rows ?? []).map((row, index) => [
+      index + 1,
+      ...(section.columns ?? []).map((column) => row.values?.[column.id] ?? ""),
+    ]),
+  ];
+};
 
 const buildMembersRows = (project, members) => [
-  ["Phan Cong Nhan Su"],
+  ["Phân Công Nhân Sự"],
   [],
-  ["Ten Du An", project.name],
+  ["Tên Dự Án", project.name],
   [],
-  ["STT", "Ten", "Vai Tro", "Email", "So Dien Thoai", "Phan Cong"],
+  ["STT", "Tên", "Vai Trò", "Email", "Số Điện Thoại", "Phân Công"],
   ...members.map((member, index) => [
     index + 1,
     member.name ?? "",
@@ -133,6 +118,52 @@ const buildMembersRows = (project, members) => [
     member.phone ?? "",
     member.assignment ?? "",
   ]),
+];
+
+const buildMultiProjectSummaryRows = (projects) => [
+  ["Báo Cáo Tổng Hợp Dự Án"],
+  [],
+  [
+    "STT",
+    "Tên Dự Án",
+    "Trạng Thái",
+    "Công Trình",
+    "Mã Số",
+    "Ngày",
+    "Số Thành Viên",
+    "Số Dòng Tiến Độ",
+    "Số Dòng Kiểm Soát",
+    "Số Dòng Vật Tư",
+  ],
+  ...projects.map((project, index) => [
+    index + 1,
+    project.name,
+    project.status === "active" ? "Đang triển khai" : "Hoàn thành",
+    project.siteName,
+    project.code,
+    project.date,
+    project.members?.length ?? 0,
+    project.progressChecks?.rows?.length ?? 0,
+    project.processControls?.rows?.length ?? 0,
+    project.materialControls?.rows?.length ?? 0,
+  ]),
+];
+
+const buildMultiProjectDetailRows = (project) => [
+  ["Thông Tin Dự Án"],
+  [],
+  ["Tên Dự Án", project.name],
+  ["Trạng Thái", project.status === "active" ? "Đang triển khai" : "Hoàn thành"],
+  ["Công Trình", project.siteName],
+  ["Mã Số", project.code],
+  ["Ngày", project.date],
+  ["Biểu Mẫu", project.formNo],
+  ["Hiệu Chỉnh", project.revision],
+  ["Mô Tả", project.desc],
+  ["Số Thành Viên", project.members?.length ?? 0],
+  ["Số Dòng Tiến Độ Thi Công", project.progressChecks?.rows?.length ?? 0],
+  ["Số Dòng Kiểm Soát Quá Trình", project.processControls?.rows?.length ?? 0],
+  ["Số Dòng Kiểm Tra Vật Tư", project.materialControls?.rows?.length ?? 0],
 ];
 
 export const exportProjectToExcel = (projectInput, memberEmployees = []) => {
@@ -145,20 +176,18 @@ export const exportProjectToExcel = (projectInput, memberEmployees = []) => {
   XLSX.utils.book_append_sheet(workbook, overviewSheet, "TongQuan");
 
   for (const section of SECTION_CONFIG) {
-    const sectionRows = buildSectionRows(project, section);
+    const sectionRows = buildSectionRows(project, section.key);
     const sectionSheet = XLSX.utils.aoa_to_sheet(sectionRows);
-    applySheetFormatting(sectionSheet, sectionRows, [
-      DEFAULT_WIDTHS.narrow,
-      DEFAULT_WIDTHS.wide,
-      DEFAULT_WIDTHS.medium,
-      DEFAULT_WIDTHS.medium,
-      DEFAULT_WIDTHS.medium,
-      DEFAULT_WIDTHS.medium,
-      DEFAULT_WIDTHS.wide,
-      DEFAULT_WIDTHS.wide,
-      DEFAULT_WIDTHS.medium,
-    ]);
-    XLSX.utils.book_append_sheet(workbook, sectionSheet, section.key);
+    applySheetFormatting(
+      sectionSheet,
+      sectionRows,
+      [DEFAULT_WIDTHS.narrow, ...Array.from({ length: 24 }, () => DEFAULT_WIDTHS.wide)],
+    );
+    XLSX.utils.book_append_sheet(
+      workbook,
+      sectionSheet,
+      sanitizeSheetName(section.title, section.key),
+    );
   }
 
   const memberRows = buildMembersRows(project, memberEmployees);
@@ -174,4 +203,41 @@ export const exportProjectToExcel = (projectInput, memberEmployees = []) => {
   XLSX.utils.book_append_sheet(workbook, membersSheet, "NhanSu");
 
   XLSX.writeFileXLSX(workbook, `${sanitizeFileName(project.name)}.xlsx`);
+};
+
+export const exportProjectsReportToExcel = (projectsInput = []) => {
+  const projects = projectsInput.map(normalizeProject);
+  if (!projects.length) return;
+
+  const workbook = XLSX.utils.book_new();
+
+  const summaryRows = buildMultiProjectSummaryRows(projects);
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+  applySheetFormatting(summarySheet, summaryRows, [
+    DEFAULT_WIDTHS.narrow,
+    DEFAULT_WIDTHS.wide,
+    18,
+    DEFAULT_WIDTHS.wide,
+    16,
+    16,
+    16,
+    16,
+    16,
+    16,
+  ]);
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "TongHop");
+
+  projects.forEach((project, index) => {
+    const detailRows = buildMultiProjectDetailRows(project);
+    const detailSheet = XLSX.utils.aoa_to_sheet(detailRows);
+    applySheetFormatting(detailSheet, detailRows, [24, DEFAULT_WIDTHS.xwide]);
+    XLSX.utils.book_append_sheet(
+      workbook,
+      detailSheet,
+      sanitizeSheetName(`${index + 1}-${project.name}`, `DuAn${index + 1}`),
+    );
+  });
+
+  const dateSuffix = new Date().toISOString().slice(0, 10);
+  XLSX.writeFileXLSX(workbook, `bao-cao-du-an-${dateSuffix}.xlsx`);
 };

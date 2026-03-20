@@ -6,6 +6,9 @@ import {
 } from "react-router-dom";
 
 import Login from "./pages/auth/Login";
+import ForgotPassword from "./pages/auth/ForgotPassword";
+import VerifyOtp from "./pages/auth/VerifyOtp";
+import ResetPassword from "./pages/auth/ResetPassword";
 import Dashboard from "./pages/dashboard/Dashboard";
 import Projects from "./pages/project/Projects";
 import Employees from "./pages/employee/Employees";
@@ -25,6 +28,16 @@ function PrivateRoute({ children }) {
 
   if (!token) {
     return <Navigate to="/login" replace />;
+  }
+
+  return children;
+}
+
+function AdminRoute({ children }) {
+  const { user } = useContext(AuthContext);
+
+  if (user?.role !== "admin") {
+    return <Navigate to="/projects" replace />;
   }
 
   return children;
@@ -62,6 +75,30 @@ function App() {
               </PublicRoute>
             }
           />
+          <Route
+            path="/forgot-password"
+            element={
+              <PublicRoute>
+                <ForgotPassword />
+              </PublicRoute>
+            }
+          />
+          <Route
+            path="/verify-otp"
+            element={
+              <PublicRoute>
+                <VerifyOtp />
+              </PublicRoute>
+            }
+          />
+          <Route
+            path="/reset-password"
+            element={
+              <PublicRoute>
+                <ResetPassword />
+              </PublicRoute>
+            }
+          />
 
           {/* Protected Layout */}
           <Route
@@ -71,13 +108,41 @@ function App() {
               </PrivateRoute>
             }
           >
-            <Route path="/dashboard" element={<Dashboard />} />
+            <Route
+              path="/dashboard"
+              element={
+                <AdminRoute>
+                  <Dashboard />
+                </AdminRoute>
+              }
+            />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:id" element={<ProjectDetail />} />
 
-            <Route path="/employees" element={<Employees />} />
-            <Route path="/employees/add" element={<AddEmployee />} />
-            <Route path="/employees/:id" element={<EmployeeDetail />} />
+            <Route
+              path="/employees"
+              element={
+                <AdminRoute>
+                  <Employees />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/employees/add"
+              element={
+                <AdminRoute>
+                  <AddEmployee />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/employees/:id"
+              element={
+                <AdminRoute>
+                  <EmployeeDetail />
+                </AdminRoute>
+              }
+            />
           </Route>
 
           {/* fallback */}

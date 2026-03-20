@@ -1,15 +1,27 @@
 import mongoose from "mongoose";
 
-const sectionItemSchema = new mongoose.Schema(
+const sectionColumnSchema = new mongoose.Schema(
   {
-    objective: { type: String, default: "" },
-    usedForms: { type: String, default: "" },
-    personInCharge: { type: String, default: "" },
-    startTime: { type: String, default: "" },
-    endTime: { type: String, default: "" },
-    accomplishment: { type: String, default: "" },
-    correctiveMeasure: { type: String, default: "" },
-    remarks: { type: String, default: "" },
+    id: { type: String, required: true },
+    name: { type: String, default: "" },
+  },
+  { _id: false },
+);
+
+const sectionRowSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    values: { type: Map, of: String, default: {} },
+  },
+  { _id: false },
+);
+
+const sectionSchema = new mongoose.Schema(
+  {
+    title: { type: String, default: "" },
+    subtitle: { type: String, default: "" },
+    columns: { type: [sectionColumnSchema], default: [] },
+    rows: { type: [sectionRowSchema], default: [] },
   },
   { _id: false },
 );
@@ -40,6 +52,18 @@ const projectHistorySchema = new mongoose.Schema(
   { _id: false },
 );
 
+const activityLogSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    actorName: { type: String, default: "" },
+    sectionKey: { type: String, default: "" },
+    sectionLabel: { type: String, default: "" },
+    text: { type: String, default: "" },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const projectSchema = new mongoose.Schema({
   name: { type: String, default: "" },
   status: { type: String, enum: ["active", "inactive"], default: "active" },
@@ -50,16 +74,16 @@ const projectSchema = new mongoose.Schema({
   code: { type: String, default: "" },
   siteName: { type: String, default: "" },
   progressChecks: {
-    type: [sectionItemSchema],
-    default: [],
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({}),
   },
   processControls: {
-    type: [sectionItemSchema],
-    default: [],
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({}),
   },
   materialControls: {
-    type: [sectionItemSchema],
-    default: [],
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({}),
   },
   members: {
     type: [memberSchema],
@@ -71,6 +95,10 @@ const projectSchema = new mongoose.Schema({
   },
   updateHistory: {
     type: [projectHistorySchema],
+    default: [],
+  },
+  activityLogs: {
+    type: [activityLogSchema],
     default: [],
   },
 });

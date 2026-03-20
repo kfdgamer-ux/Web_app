@@ -35,8 +35,12 @@ mongoose
     const existing = await User.findOne({ username: adminUsername });
     if (!existing) {
       const passwordHash = await bcrypt.hash(adminPassword, 10);
-      await User.create({ username: adminUsername, passwordHash });
+      await User.create({ username: adminUsername, passwordHash, role: "admin" });
       console.log("Created default admin user (username: admin)");
+    } else if (existing.role !== "admin") {
+      existing.role = "admin";
+      existing.employeeId = null;
+      await existing.save();
     }
   })
   .catch((err) => console.log(err));

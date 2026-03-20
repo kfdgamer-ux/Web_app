@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { CloseOutlined, CommentOutlined, DownloadOutlined, SendOutlined } from "@ant-design/icons";
 import {
@@ -19,17 +19,20 @@ import {
   message,
 } from "antd";
 import { getEmployees, getProjects, updateProject } from "../../utils/api";
+import { AuthContext } from "../../context/AuthContextValue";
 import { exportProjectToExcel } from "../../utils/projectExport";
 import {
-  createSectionRow,
   createProjectTemplate,
+  createSectionColumn,
+  createSectionRow,
   normalizeProject,
   SECTION_CONFIG,
 } from "../../utils/projectTemplate";
 
 const { Title, Text } = Typography;
 const EMPTY_VALUE = "-";
-const formatChatTime = (value) => {
+
+const formatDateTime = (value) => {
   if (!value) return "";
 
   const date = new Date(value);
@@ -43,19 +46,11 @@ const formatChatTime = (value) => {
     year: "numeric",
   });
 };
-const SECTION_FIELD_CONFIG = [
-  { label: "Hạng Mục", dataIndex: "objective" },
-  { label: "Biểu Mẫu Sử Dụng", dataIndex: "usedForms" },
-  { label: "Người Thực Hiện", dataIndex: "personInCharge" },
-  { label: "Thời Gian Bắt Đầu", dataIndex: "startTime" },
-  { label: "Thời Gian Hoàn Thành", dataIndex: "endTime" },
-  { label: "Kết Quả Thực Hiện", dataIndex: "accomplishment" },
-  { label: "Biện Pháp Khắc Phục", dataIndex: "correctiveMeasure" },
-  { label: "Ghi Chú", dataIndex: "remarks" },
-];
 
 export default function ProjectDetail() {
   const { id } = useParams();
+  const { user } = useContext(AuthContext);
+  const isAdmin = user?.role === "admin";
 
   const [project, setProject] = useState(null);
   const [employees, setEmployees] = useState([]);
@@ -67,8 +62,15 @@ export default function ProjectDetail() {
   const [sectionEditor, setSectionEditor] = useState({
     open: false,
     sectionKey: "",
-    index: null,
-    draft: createSectionRow(),
+    rowId: null,
+    draftValues: {},
+  });
+  const [sectionConfigEditor, setSectionConfigEditor] = useState({
+    open: false,
+    sectionKey: "",
+    title: "",
+    subtitle: "",
+    columns: [],
   });
   const [assignmentEditor, setAssignmentEditor] = useState({
     open: false,
@@ -82,24 +84,41 @@ export default function ProjectDetail() {
 
   useEffect(() => {
     const fetchData = async () => {
-      const projects = await getProjects();
+      const [projects, emps] = await Promise.all([getProjects(), getEmployees()]);
       const foundProject = projects.find((item) => item._id === id);
-      const emps = await getEmployees();
-
-      setProject(normalizeProject(foundProject));
+      setProject(foundProject ? normalizeProject(foundProject) : null);
       setEmployees(emps);
     };
 
     fetchData();
   }, [id]);
 
-  if (!project) return <h2>Đang tải...</h2>;
+  if (!project) {
+    return <h2>Đang tải...</h2>;
+  }
 
   const members = project.members ?? [];
+  const currentEmployee = employees.find((item) => item._id === user?.employeeId);
+  const currentChatAuthor = isAdmin
+    ? user?.username || "admin"
+    : currentEmployee?.name || user?.username || "Nhân viên";
+
   const memberEmployees = members
     .map((member) => {
       const employee = employees.find((item) => item._id === member.employeeId);
-      if (!employee) return null;
+
+      if (!employee) {
+        return {
+          _id: member.employeeId,
+          name:
+            member.employeeId === user?.employeeId
+              ? user?.username || "Nhân viên"
+              : "Thành viên dự án",
+          role: "",
+          avatar: "",
+          assignment: member.assignment,
+        };
+      }
 
       return {
         ...employee,
@@ -112,7 +131,7 @@ export default function ProjectDetail() {
     .filter((employee) => !members.some((member) => member.employeeId === employee._id))
     .filter((employee) => employee.name?.toLowerCase().includes(search.toLowerCase()));
 
-  const chatMessages = project?.chatMessages?.length
+  const chatMessages = project.chatMessages?.length
     ? project.chatMessages
     : [
         {
@@ -122,6 +141,19 @@ export default function ProjectDetail() {
           createdAt: new Date().toISOString(),
         },
       ];
+
+  const activityLogs = [...(project.activityLogs ?? [])].reverse();
+  const availableSectionTemplates = SECTION_CONFIG.filter(
+    (sectionMeta) => !(project[sectionMeta.key]?.columns?.length > 0),
+  );
+  const createdSections = SECTION_CONFIG.filter(
+    (sectionMeta) => project[sectionMeta.key]?.columns?.length > 0,
+  );
+
+  const findEmployeeByActorName = (actorName) => {
+    if (!actorName) return null;
+    return employees.find((employee) => employee.name === actorName) ?? null;
+  };
 
   const saveProject = async (nextProject, successMessage = "Cập nhật dự án thành công") => {
     setSaving(true);
@@ -135,6 +167,16 @@ export default function ProjectDetail() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const updateSection = async (sectionKey, nextSection, successMessage) => {
+    await saveProject(
+      {
+        ...project,
+        [sectionKey]: nextSection,
+      },
+      successMessage,
+    );
   };
 
   const openOverviewEditor = () => {
@@ -162,51 +204,181 @@ export default function ProjectDetail() {
     setOverviewOpen(false);
   };
 
-  const openSectionEditor = (sectionKey, index = null) => {
-    const currentRow =
-      index === null ? createSectionRow() : (project[sectionKey]?.[index] ?? createSectionRow());
+  const openSectionEditor = (sectionKey, rowId = null) => {
+    const section = project[sectionKey];
+    const currentRow = rowId
+      ? section.rows.find((row) => row.id === rowId)
+      : createSectionRow(section.columns);
 
     setSectionEditor({
       open: true,
       sectionKey,
-      index,
-      draft: { ...currentRow },
+      rowId,
+      draftValues: { ...(currentRow?.values ?? {}) },
     });
   };
 
   const submitSectionUpdate = async () => {
-    const { sectionKey, index, draft } = sectionEditor;
-    const nextRows =
-      index === null
-        ? [...project[sectionKey], draft]
-        : project[sectionKey].map((row, rowIndex) => (rowIndex === index ? draft : row));
+    const { sectionKey, rowId, draftValues } = sectionEditor;
+    const section = project[sectionKey];
 
-    await saveProject(
+    const nextRows = rowId
+      ? section.rows.map((row) =>
+          row.id === rowId
+            ? {
+                ...row,
+                values: draftValues,
+              }
+            : row,
+        )
+      : [
+          ...section.rows,
+          {
+            id: `row-${Date.now()}`,
+            values: section.columns.reduce((acc, column) => {
+              acc[column.id] = draftValues[column.id] ?? "";
+              return acc;
+            }, {}),
+          },
+        ];
+
+    await updateSection(
+      sectionKey,
       {
-        ...project,
-        [sectionKey]: nextRows,
+        ...section,
+        rows: nextRows,
       },
-      index === null ? "Đã thêm dòng" : "Cập nhật thông tin thành công",
+      rowId ? "Cập nhật dữ liệu thành công" : "Đã thêm dòng dữ liệu",
     );
 
     setSectionEditor({
       open: false,
       sectionKey: "",
-      index: null,
-      draft: createSectionRow(),
+      rowId: null,
+      draftValues: {},
     });
   };
 
-  const removeSectionRow = async (sectionKey, index) => {
-    const nextRows = project[sectionKey].filter((_, rowIndex) => rowIndex !== index);
+  const removeSectionRow = async (sectionKey, rowId) => {
+    const section = project[sectionKey];
+    const nextRows = section.rows.filter((row) => row.id !== rowId);
 
-    await saveProject(
+    await updateSection(
+      sectionKey,
       {
-        ...project,
-        [sectionKey]: nextRows.length ? nextRows : [createSectionRow()],
+        ...section,
+        rows: nextRows,
       },
-      "Đã xóa dòng",
+      "Đã xóa dòng dữ liệu",
     );
+  };
+
+  const openSectionConfigEditor = (sectionKey) => {
+    const section = project[sectionKey];
+    setSectionConfigEditor({
+      open: true,
+      sectionKey,
+      title: section.title,
+      subtitle: section.subtitle,
+      columns: section.columns.map((column) => ({ ...column })),
+    });
+  };
+
+  const addConfigColumn = () => {
+    setSectionConfigEditor((current) => ({
+      ...current,
+      columns: [...current.columns, createSectionColumn(`Tham số ${current.columns.length + 1}`)],
+    }));
+  };
+
+  const updateConfigColumnName = (columnId, name) => {
+    setSectionConfigEditor((current) => ({
+      ...current,
+      columns: current.columns.map((column) =>
+        column.id === columnId
+          ? {
+              ...column,
+              name,
+            }
+          : column,
+      ),
+    }));
+  };
+
+  const removeConfigColumn = (columnId) => {
+    setSectionConfigEditor((current) => ({
+      ...current,
+      columns: current.columns.filter((column) => column.id !== columnId),
+    }));
+  };
+
+  const submitSectionConfigUpdate = async () => {
+    const { sectionKey, title, subtitle, columns } = sectionConfigEditor;
+
+    if (!title.trim()) {
+      message.warning("Vui lòng nhập tên bảng");
+      return;
+    }
+
+    if (!columns.length) {
+      message.warning("Vui lòng tạo ít nhất một tham số");
+      return;
+    }
+
+    if (columns.some((column) => !column.name.trim())) {
+      message.warning("Vui lòng nhập tên cho tất cả tham số");
+      return;
+    }
+
+    const section = project[sectionKey];
+    const nextSection = {
+      ...section,
+      title: title.trim(),
+      subtitle: subtitle.trim(),
+      columns: columns.map((column) => ({
+        ...column,
+        name: column.name.trim(),
+      })),
+      rows: section.rows.map((row) => ({
+        ...row,
+        values: columns.reduce((acc, column) => {
+          acc[column.id] = row.values?.[column.id] ?? "";
+          return acc;
+        }, {}),
+      })),
+    };
+
+    await updateSection(sectionKey, nextSection, "Cập nhật cấu hình bảng thành công");
+    setSectionConfigEditor({
+      open: false,
+      sectionKey: "",
+      title: "",
+      subtitle: "",
+      columns: [],
+    });
+  };
+
+  const deleteSectionTable = async (sectionKey) => {
+    await updateSection(
+      sectionKey,
+      {
+        title: "",
+        subtitle: "",
+        columns: [],
+        rows: [],
+      },
+      "Đã xóa bảng dữ liệu",
+    );
+
+    if (sectionConfigEditor.sectionKey === sectionKey) {
+      setSectionConfigEditor({
+        open: false,
+        sectionKey: "",
+        title: "",
+        subtitle: "",
+        columns: [],
+      });
+    }
   };
 
   const openAssignmentEditor = (employeeId, mode) => {
@@ -276,7 +448,7 @@ export default function ProjectDetail() {
 
     const nextMessage = {
       id: String(Date.now()),
-      author: "Người dùng",
+      author: currentChatAuthor,
       text: chatInput.trim(),
       createdAt: new Date().toISOString(),
     };
@@ -303,15 +475,15 @@ export default function ProjectDetail() {
       width: 180,
     },
     {
-      title: "Vai Trò",
+      title: "Vai trò",
       dataIndex: "role",
       width: 140,
     },
     {
-      title: "Thao Tác",
+      title: "Thao tác",
       render: (_, record) => (
         <Button type="primary" onClick={() => openAssignmentEditor(record._id, "add")}>
-          Thêm Vào Dự Án
+          Thêm vào dự án
         </Button>
       ),
       width: 180,
@@ -330,25 +502,26 @@ export default function ProjectDetail() {
       width: 180,
     },
     {
-      title: "Vai Trò",
+      title: "Vai trò",
       dataIndex: "role",
       width: 140,
     },
     {
-      title: "Phân Công",
+      title: "Phân công",
       dataIndex: "assignment",
       render: (value) => value || EMPTY_VALUE,
     },
     {
-      title: "Thao Tác",
-      render: (_, record) => (
-        <Space>
-          <Button onClick={() => openAssignmentEditor(record._id, "edit")}>Cập Nhật</Button>
-          <Button danger onClick={() => removeMember(record._id)} loading={saving}>
-            Xóa
-          </Button>
-        </Space>
-      ),
+      title: "Thao tác",
+      render: (_, record) =>
+        isAdmin ? (
+          <Space>
+            <Button onClick={() => openAssignmentEditor(record._id, "edit")}>Cập nhật</Button>
+            <Button danger onClick={() => removeMember(record._id)} loading={saving}>
+              Xóa
+            </Button>
+          </Space>
+        ) : null,
       width: 200,
     },
   ];
@@ -359,19 +532,14 @@ export default function ProjectDetail() {
         <Space align="start" style={{ width: "100%", justifyContent: "space-between" }}>
           <div>
             <Title level={2} style={{ marginBottom: 4 }}>
-              {project.name || "Chi Tiết Dự Án"}
+              {project.name || "Chi tiết dự án"}
             </Title>
-            <Text type="secondary">
-              Cấu trúc được xây dựng theo mẫu quản lý tiến độ thi công.
-            </Text>
+            <Text type="secondary">Thông tin và nhật ký công việc của dự án.</Text>
           </div>
 
           <Space>
-            <Button onClick={openOverviewEditor}>Cập Nhật Thông Tin</Button>
-            <Button
-              icon={<DownloadOutlined />}
-              onClick={() => exportProjectToExcel(project, memberEmployees)}
-            >
+            {isAdmin && <Button onClick={openOverviewEditor}>Cập nhật thông tin</Button>}
+            <Button icon={<DownloadOutlined />} onClick={() => exportProjectToExcel(project, memberEmployees)}>
               Xuất Excel
             </Button>
           </Space>
@@ -380,39 +548,33 @@ export default function ProjectDetail() {
 
       <Row gutter={[24, 24]} align="stretch">
         <Col xs={24} xl={10}>
-          <Card title="Tổng Quan Dự Án" style={{ height: "100%" }}>
+          <Card title="Tổng quan dự án" style={{ height: "100%" }}>
             <Descriptions bordered column={1}>
-              <Descriptions.Item label="Tên Dự Án">{project.name || EMPTY_VALUE}</Descriptions.Item>
-              <Descriptions.Item label="Trạng Thái">
+              <Descriptions.Item label="Tên dự án">{project.name || EMPTY_VALUE}</Descriptions.Item>
+              <Descriptions.Item label="Trạng thái">
                 <Tag color={project.status === "active" ? "green" : "default"}>
-                  {project.status === "active" ? "Đang Hoạt Động" : "Ngưng Hoạt Động"}
+                  {project.status === "active" ? "Đang hoạt động" : "Ngưng hoạt động"}
                 </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="Công Trình">
-                {project.siteName || EMPTY_VALUE}
-              </Descriptions.Item>
-              <Descriptions.Item label="Mã Số">{project.code || EMPTY_VALUE}</Descriptions.Item>
+              <Descriptions.Item label="Công trình">{project.siteName || EMPTY_VALUE}</Descriptions.Item>
+              <Descriptions.Item label="Mã số">{project.code || EMPTY_VALUE}</Descriptions.Item>
               <Descriptions.Item label="Ngày">{project.date || EMPTY_VALUE}</Descriptions.Item>
-              <Descriptions.Item label="Biểu Mẫu">{project.formNo || EMPTY_VALUE}</Descriptions.Item>
-              <Descriptions.Item label="Hiệu Chỉnh">
-                {project.revision || EMPTY_VALUE}
-              </Descriptions.Item>
-              <Descriptions.Item label="Mô Tả">{project.desc || EMPTY_VALUE}</Descriptions.Item>
+              <Descriptions.Item label="Biểu mẫu">{project.formNo || EMPTY_VALUE}</Descriptions.Item>
+              <Descriptions.Item label="Hiệu chỉnh">{project.revision || EMPTY_VALUE}</Descriptions.Item>
+              <Descriptions.Item label="Mô tả">{project.desc || EMPTY_VALUE}</Descriptions.Item>
             </Descriptions>
             <div style={{ marginTop: 12 }}>
-              <Text type="secondary">
-                Số phiên bản lịch sử đã lưu: {project.updateHistory?.length ?? 0}
-              </Text>
+              <Text type="secondary">Số phiên bản lịch sử đã lưu: {project.updateHistory?.length ?? 0}</Text>
             </div>
           </Card>
         </Col>
 
         <Col xs={24} xl={14}>
-          <Card title="Phân Công Nhân Sự" style={{ height: "100%" }}>
+          <Card title="Phân công nhân sự" style={{ height: "100%" }}>
             <Card
               size="small"
-              title="Thành Viên Dự Án"
-              extra={<Button onClick={() => setMemberToolboxOpen(true)}>Thêm Thành Viên</Button>}
+              title="Thành viên dự án"
+              extra={isAdmin ? <Button onClick={() => setMemberToolboxOpen(true)}>Thêm thành viên</Button> : null}
               style={{ height: "100%" }}
               bodyStyle={{ height: "calc(100% - 57px)" }}
             >
@@ -428,7 +590,39 @@ export default function ProjectDetail() {
         </Col>
       </Row>
 
-      {SECTION_CONFIG.map((section) => {
+      {isAdmin && (
+        <Card title="Tạo bảng mới">
+          {availableSectionTemplates.length ? (
+            <Space wrap size="middle">
+              {availableSectionTemplates.map((sectionMeta) => (
+                <Card
+                  key={sectionMeta.key}
+                  size="small"
+                  style={{ width: 280, borderRadius: 14 }}
+                  bodyStyle={{ padding: 16 }}
+                >
+                  <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                    <div>
+                      <Text strong>{sectionMeta.title}</Text>
+                      <div>
+                        <Text type="secondary">{sectionMeta.subtitle}</Text>
+                      </div>
+                    </div>
+                    <Button type="primary" onClick={() => openSectionConfigEditor(sectionMeta.key)}>
+                      Tạo bảng
+                    </Button>
+                  </Space>
+                </Card>
+              ))}
+            </Space>
+          ) : (
+            <Empty description="Tất cả bảng đã được tạo" />
+          )}
+        </Card>
+      )}
+
+      {createdSections.map((sectionMeta) => {
+        const section = project[sectionMeta.key];
         const columns = [
           {
             title: "STT",
@@ -436,23 +630,18 @@ export default function ProjectDetail() {
             width: 70,
             fixed: "left",
           },
-          ...SECTION_FIELD_CONFIG.map((column) => ({
-            title: column.label,
-            dataIndex: column.dataIndex,
-            width:
-              column.dataIndex === "objective" ||
-              column.dataIndex === "accomplishment" ||
-              column.dataIndex === "correctiveMeasure"
-                ? 220
-                : 170,
+          ...(section.columns ?? []).map((column) => ({
+            title: column.name || "Tham số",
+            dataIndex: ["values", column.id],
+            width: 220,
             render: (value) => value || EMPTY_VALUE,
           })),
           {
-            title: "Thao Tác",
-            render: (_, __, index) => (
+            title: "Thao tác",
+            render: (_, record) => (
               <Space>
-                <Button onClick={() => openSectionEditor(section.key, index)}>Cập Nhật</Button>
-                <Button danger onClick={() => removeSectionRow(section.key, index)} loading={saving}>
+                <Button onClick={() => openSectionEditor(sectionMeta.key, record.id)}>Cập nhật</Button>
+                <Button danger onClick={() => removeSectionRow(sectionMeta.key, record.id)} loading={saving}>
                   Xóa
                 </Button>
               </Space>
@@ -464,180 +653,233 @@ export default function ProjectDetail() {
 
         return (
           <Card
-            key={section.key}
+            key={sectionMeta.key}
             title={section.title}
             extra={
-              <Space>
-                <Text type="secondary">{section.subtitle}</Text>
-                <Button onClick={() => openSectionEditor(section.key)}>Thêm Dòng</Button>
+              <Space wrap>
+                {!!section.subtitle && <Text type="secondary">{section.subtitle}</Text>}
+                {isAdmin && <Button onClick={() => openSectionConfigEditor(sectionMeta.key)}>Cấu hình bảng</Button>}
+                {isAdmin && (
+                  <Button danger onClick={() => deleteSectionTable(sectionMeta.key)} loading={saving}>
+                    Xóa bảng
+                  </Button>
+                )}
+                <Button
+                  onClick={() => {
+                    if (!section.columns.length) {
+                      message.warning("Hãy tạo ít nhất một tham số trước khi thêm dữ liệu");
+                      return;
+                    }
+                    openSectionEditor(sectionMeta.key);
+                  }}
+                >
+                  Thêm dòng
+                </Button>
               </Space>
             }
           >
             <Table
-              rowKey={(_, index) => `${section.key}-${index}`}
+              rowKey="id"
               columns={columns}
-              dataSource={project[section.key]}
+              dataSource={section.rows}
               pagination={false}
               locale={{ emptyText: <Empty description="Chưa có dữ liệu" /> }}
-              scroll={{ x: 1600 }}
+              scroll={{ x: 1100 }}
             />
           </Card>
         );
       })}
 
-      <Modal
-        open={memberToolboxOpen}
-        title="Thêm Thành Viên"
-        onCancel={() => setMemberToolboxOpen(false)}
-        footer={null}
-        width={900}
-      >
-        <Input
-          placeholder="Tìm kiếm nhân viên..."
-          style={{ width: 320, marginBottom: 16 }}
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
+      <Card title="Nhật ký thao tác">
+        {activityLogs.length ? (
+          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            {activityLogs.map((log) => (
+              <div
+                key={log.id}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 12,
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #e5e7eb",
+                  background: "#f8fafc",
+                }}
+              >
+                <Avatar src={findEmployeeByActorName(log.actorName)?.avatar}>
+                  {(log.actorName || "A").charAt(0)}
+                </Avatar>
+                <Space direction="vertical" size={2}>
+                  <Text>
+                    {log.actorName || "Nhân viên"} đã chỉnh sửa {log.sectionLabel || "bảng dữ liệu"}
+                  </Text>
+                  <Text type="secondary">{formatDateTime(log.createdAt)}</Text>
+                </Space>
+              </div>
+            ))}
+          </Space>
+        ) : (
+          <Empty description="Chưa có nhật ký thao tác" />
+        )}
+      </Card>
 
-        <Table
-          rowKey="_id"
-          columns={employeeColumns}
-          dataSource={availableEmployees}
-          pagination={{ pageSize: 6, hideOnSinglePage: true }}
-          scroll={{ x: 700 }}
-        />
-      </Modal>
+      {isAdmin && (
+        <Modal
+          open={memberToolboxOpen}
+          title="Thêm thành viên"
+          onCancel={() => setMemberToolboxOpen(false)}
+          footer={null}
+          width={900}
+        >
+          <Input
+            placeholder="Tìm kiếm nhân viên..."
+            style={{ width: 320, marginBottom: 16 }}
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
 
-      <Modal
-        open={overviewOpen}
-        title="Cập Nhật Thông Tin Dự Án"
-        onCancel={() => setOverviewOpen(false)}
-        onOk={submitOverviewUpdate}
-        okText="Cập Nhật Thông Tin"
-        confirmLoading={saving}
-      >
-        <Space direction="vertical" style={{ width: "100%" }} size="middle">
-          <div>
-            <Text>Tên Dự Án</Text>
-            <Input
-              value={overviewDraft.name}
-              onChange={(event) =>
-                setOverviewDraft((current) => ({ ...current, name: event.target.value }))
-              }
-            />
-          </div>
+          <Table
+            rowKey="_id"
+            columns={employeeColumns}
+            dataSource={availableEmployees}
+            pagination={{ pageSize: 6, hideOnSinglePage: true }}
+            scroll={{ x: 700 }}
+          />
+        </Modal>
+      )}
 
-          <div>
-            <Text>Trạng Thái</Text>
-            <Select
-              style={{ width: "100%" }}
-              value={overviewDraft.status}
-              onChange={(value) =>
-                setOverviewDraft((current) => ({ ...current, status: value }))
-              }
-              options={[
-                { value: "active", label: "Đang Hoạt Động" },
-                { value: "inactive", label: "Ngưng Hoạt Động" },
-              ]}
-            />
-          </div>
-
-          <div>
-            <Text>Công Trình</Text>
-            <Input
-              value={overviewDraft.siteName}
-              onChange={(event) =>
-                setOverviewDraft((current) => ({ ...current, siteName: event.target.value }))
-              }
-            />
-          </div>
-
-          <Row gutter={12}>
-            <Col span={12}>
-              <Text>Mã Số</Text>
+      {isAdmin && (
+        <Modal
+          open={overviewOpen}
+          title="Cập nhật thông tin dự án"
+          onCancel={() => setOverviewOpen(false)}
+          onOk={submitOverviewUpdate}
+          okText="Cập nhật thông tin"
+          confirmLoading={saving}
+        >
+          <Space direction="vertical" style={{ width: "100%" }} size="middle">
+            <div>
+              <Text>Tên dự án</Text>
               <Input
-                value={overviewDraft.code}
+                value={overviewDraft.name}
                 onChange={(event) =>
-                  setOverviewDraft((current) => ({ ...current, code: event.target.value }))
+                  setOverviewDraft((current) => ({ ...current, name: event.target.value }))
                 }
               />
-            </Col>
+            </div>
 
-            <Col span={12}>
-              <Text>Ngày</Text>
+            <div>
+              <Text>Trạng thái</Text>
+              <Select
+                style={{ width: "100%" }}
+                value={overviewDraft.status}
+                onChange={(value) =>
+                  setOverviewDraft((current) => ({ ...current, status: value }))
+                }
+                options={[
+                  { value: "active", label: "Đang hoạt động" },
+                  { value: "inactive", label: "Ngưng hoạt động" },
+                ]}
+              />
+            </div>
+
+            <div>
+              <Text>Công trình</Text>
               <Input
-                value={overviewDraft.date}
+                value={overviewDraft.siteName}
                 onChange={(event) =>
-                  setOverviewDraft((current) => ({ ...current, date: event.target.value }))
+                  setOverviewDraft((current) => ({ ...current, siteName: event.target.value }))
                 }
               />
-            </Col>
-          </Row>
+            </div>
 
-          <Row gutter={12}>
-            <Col span={12}>
-              <Text>Biểu Mẫu</Text>
-              <Input
-                value={overviewDraft.formNo}
+            <Row gutter={12}>
+              <Col span={12}>
+                <Text>Mã số</Text>
+                <Input
+                  value={overviewDraft.code}
+                  onChange={(event) =>
+                    setOverviewDraft((current) => ({ ...current, code: event.target.value }))
+                  }
+                />
+              </Col>
+
+              <Col span={12}>
+                <Text>Ngày</Text>
+                <Input
+                  value={overviewDraft.date}
+                  onChange={(event) =>
+                    setOverviewDraft((current) => ({ ...current, date: event.target.value }))
+                  }
+                />
+              </Col>
+            </Row>
+
+            <Row gutter={12}>
+              <Col span={12}>
+                <Text>Biểu mẫu</Text>
+                <Input
+                  value={overviewDraft.formNo}
+                  onChange={(event) =>
+                    setOverviewDraft((current) => ({ ...current, formNo: event.target.value }))
+                  }
+                />
+              </Col>
+
+              <Col span={12}>
+                <Text>Hiệu chỉnh</Text>
+                <Input
+                  value={overviewDraft.revision}
+                  onChange={(event) =>
+                    setOverviewDraft((current) => ({ ...current, revision: event.target.value }))
+                  }
+                />
+              </Col>
+            </Row>
+
+            <div>
+              <Text>Mô tả</Text>
+              <Input.TextArea
+                rows={4}
+                value={overviewDraft.desc}
                 onChange={(event) =>
-                  setOverviewDraft((current) => ({ ...current, formNo: event.target.value }))
+                  setOverviewDraft((current) => ({ ...current, desc: event.target.value }))
                 }
               />
-            </Col>
-
-            <Col span={12}>
-              <Text>Hiệu Chỉnh</Text>
-              <Input
-                value={overviewDraft.revision}
-                onChange={(event) =>
-                  setOverviewDraft((current) => ({ ...current, revision: event.target.value }))
-                }
-              />
-            </Col>
-          </Row>
-
-          <div>
-            <Text>Mô Tả</Text>
-            <Input.TextArea
-              rows={4}
-              value={overviewDraft.desc}
-              onChange={(event) =>
-                setOverviewDraft((current) => ({ ...current, desc: event.target.value }))
-              }
-            />
-          </div>
-        </Space>
-      </Modal>
+            </div>
+          </Space>
+        </Modal>
+      )}
 
       <Modal
         open={sectionEditor.open}
-        title={sectionEditor.index === null ? "Thêm Dòng" : "Cập Nhật Thông Tin"}
+        title={sectionEditor.rowId ? "Cập nhật dữ liệu" : "Thêm dòng dữ liệu"}
         onCancel={() =>
           setSectionEditor({
             open: false,
             sectionKey: "",
-            index: null,
-            draft: createSectionRow(),
+            rowId: null,
+            draftValues: {},
           })
         }
         onOk={submitSectionUpdate}
-        okText="Cập Nhật Thông Tin"
+        okText="Lưu dữ liệu"
         confirmLoading={saving}
-        width={760}
+        width={820}
       >
         <Row gutter={[12, 12]}>
-          {SECTION_FIELD_CONFIG.map((field) => (
-            <Col span={12} key={field.dataIndex}>
-              <Text>{field.label}</Text>
+          {(project[sectionEditor.sectionKey]?.columns ?? []).map((column) => (
+            <Col span={12} key={column.id}>
+              <Text>{column.name}</Text>
               <Input.TextArea
-                rows={field.dataIndex === "objective" ? 3 : 2}
-                value={sectionEditor.draft[field.dataIndex]}
+                rows={3}
+                value={sectionEditor.draftValues[column.id] ?? ""}
                 onChange={(event) =>
                   setSectionEditor((current) => ({
                     ...current,
-                    draft: {
-                      ...current.draft,
-                      [field.dataIndex]: event.target.value,
+                    draftValues: {
+                      ...current.draftValues,
+                      [column.id]: event.target.value,
                     },
                   }))
                 }
@@ -647,53 +889,117 @@ export default function ProjectDetail() {
         </Row>
       </Modal>
 
-      <Modal
-        open={assignmentEditor.open}
-        title={assignmentEditor.mode === "add" ? "Thêm Thành Viên" : "Cập Nhật Phân Công"}
-        onCancel={() =>
-          setAssignmentEditor({
-            open: false,
-            employeeId: "",
-            employeeName: "",
-            assignment: "",
-            mode: "add",
-          })
-        }
-        onOk={submitAssignmentUpdate}
-        okText="Cập Nhật Thông Tin"
-        confirmLoading={saving}
-      >
-        <Space direction="vertical" style={{ width: "100%" }}>
-          <div>
-            <Text>Nhân Viên</Text>
-            <Input value={assignmentEditor.employeeName} disabled />
-          </div>
-          <div>
-            <Text>Phân Công</Text>
-            <Input.TextArea
-              rows={4}
-              value={assignmentEditor.assignment}
-              onChange={(event) =>
-                setAssignmentEditor((current) => ({
-                  ...current,
-                  assignment: event.target.value,
-                }))
-              }
-            />
-          </div>
-        </Space>
-      </Modal>
+      {isAdmin && (
+        <Modal
+          open={sectionConfigEditor.open}
+          title="Cấu hình bảng dữ liệu"
+          onCancel={() =>
+            setSectionConfigEditor({
+              open: false,
+              sectionKey: "",
+              title: "",
+              subtitle: "",
+              columns: [],
+            })
+          }
+          onOk={submitSectionConfigUpdate}
+          okText="Lưu cấu hình"
+          confirmLoading={saving}
+          width={860}
+        >
+          <Space direction="vertical" style={{ width: "100%" }} size="middle">
+            <div>
+              <Text>Tên bảng</Text>
+              <Input
+                value={sectionConfigEditor.title}
+                onChange={(event) =>
+                  setSectionConfigEditor((current) => ({
+                    ...current,
+                    title: event.target.value,
+                  }))
+                }
+              />
+            </div>
+
+            <div>
+              <Text>Mô tả ngắn</Text>
+              <Input
+                value={sectionConfigEditor.subtitle}
+                onChange={(event) =>
+                  setSectionConfigEditor((current) => ({
+                    ...current,
+                    subtitle: event.target.value,
+                  }))
+                }
+              />
+            </div>
+
+            <Space style={{ width: "100%", justifyContent: "space-between" }}>
+              <Text strong>Danh sách tham số</Text>
+              <Button onClick={addConfigColumn}>Thêm tham số</Button>
+            </Space>
+
+            <Space direction="vertical" style={{ width: "100%" }}>
+              {sectionConfigEditor.columns.map((column, index) => (
+                <Space key={column.id} align="start" style={{ width: "100%" }}>
+                  <Input
+                    value={column.name}
+                    placeholder={`Tên tham số ${index + 1}`}
+                    onChange={(event) => updateConfigColumnName(column.id, event.target.value)}
+                  />
+                  <Button danger onClick={() => removeConfigColumn(column.id)}>
+                    Xóa
+                  </Button>
+                </Space>
+              ))}
+            </Space>
+          </Space>
+        </Modal>
+      )}
+
+      {isAdmin && (
+        <Modal
+          open={assignmentEditor.open}
+          title={assignmentEditor.mode === "add" ? "Thêm thành viên" : "Cập nhật phân công"}
+          onCancel={() =>
+            setAssignmentEditor({
+              open: false,
+              employeeId: "",
+              employeeName: "",
+              assignment: "",
+              mode: "add",
+            })
+          }
+          onOk={submitAssignmentUpdate}
+          okText="Cập nhật thông tin"
+          confirmLoading={saving}
+        >
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <div>
+              <Text>Nhân viên</Text>
+              <Input value={assignmentEditor.employeeName} disabled />
+            </div>
+            <div>
+              <Text>Phân công</Text>
+              <Input.TextArea
+                rows={4}
+                value={assignmentEditor.assignment}
+                onChange={(event) =>
+                  setAssignmentEditor((current) => ({
+                    ...current,
+                    assignment: event.target.value,
+                  }))
+                }
+              />
+            </div>
+          </Space>
+        </Modal>
+      )}
 
       {chatOpen && (
         <Card
-          title="Hộp Chat"
-          extra={
-            <Button
-              type="text"
-              icon={<CloseOutlined />}
-              onClick={() => setChatOpen(false)}
-            />
-          }
+          title="Hộp chat"
+          extra={<Button type="text" icon={<CloseOutlined />} onClick={() => setChatOpen(false)} />}
           style={{
             position: "fixed",
             right: 24,
@@ -721,7 +1027,7 @@ export default function ProjectDetail() {
                 <div
                   key={chat.id}
                   style={{
-                    alignSelf: chat.author === "Người dùng" ? "flex-end" : "flex-start",
+                    alignSelf: chat.author === currentChatAuthor ? "flex-end" : "flex-start",
                     maxWidth: "85%",
                   }}
                 >
@@ -733,14 +1039,14 @@ export default function ProjectDetail() {
                       marginTop: 4,
                       padding: "10px 12px",
                       borderRadius: 14,
-                      background: chat.author === "Người dùng" ? "#dcfce7" : "#f3f4f6",
+                      background: chat.author === currentChatAuthor ? "#dcfce7" : "#f3f4f6",
                     }}
                   >
                     <Text>{chat.text}</Text>
                   </div>
                   <div style={{ marginTop: 4 }}>
                     <Text type="secondary" style={{ fontSize: 11 }}>
-                      {formatChatTime(chat.createdAt)}
+                      {formatDateTime(chat.createdAt)}
                     </Text>
                   </div>
                 </div>
